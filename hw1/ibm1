@@ -1,16 +1,23 @@
 #!/usr/bin/env python
-import optparse
+import argparse
+import math
+import pickle
 import sys
 from collections import defaultdict
 
-optparser = optparse.OptionParser()
-optparser.add_option("-b", "--bitext", dest="bitext", default="data/dev-test-train.de-en", help="Parallel corpus (default data/dev-test-train.de-en)")
-optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to use for training and alignment")
-optparser.add_option("-i", "--iters", dest="iters", default=5, type="int", help="Number of iterations to run EM")
-(opts, _) = optparser.parse_args()
+parser = argparse.ArgumentParser()
+parser.add_argument("-b", "--bitext", default="/usr3/home/eschling/mt/hw1_data/dev-test-train.lc.de-en", help="Parallel corpus (default data/dev-test-train.de-en)")
+parser.add_argument("-n", "--num_sents", default=sys.maxint, type=int, help="Number of sentences to use for training and alignment")
+parser.add_argument("-i", "--iters", default=5, type=int, help="Number of iterations to run EM")
+parser.add_argument("-o", "--out", help="Output file for learned parameters")
+args = parser.parse_args()
 
 sys.stderr.write("Training with IBM Model 1...")
-bitext = [[sentence.strip().split() for sentence in pair.split(' ||| ')] for pair in open(opts.bitext)][:opts.num_sents]
+bitext = []
+for pair in open(args.bitext):
+  f, e = pair.split(' ||| ')
+  bitext.append([['NULL']+f.strip().split(), e.strip().split()])
+bitext = bitext[:args.num_sents]
 e_vocab = set()
 f_e_occur = defaultdict(set)
 for (n, (f, e)) in enumerate(bitext):
@@ -22,27 +29,39 @@ for (n, (f, e)) in enumerate(bitext):
     sys.stderr.write(".")
 
 p_e_f = dict()
-for f_w in f_e_occur.keys():
-  p_e_f[f_w] = defaultdict(lambda: 1.0/len(f_e_occur[f_w]))
+for f in f_e_occur.keys():
+  p_e_f[f] = dict()
+  for e in f_e_occur[f]:
+    p_e_f[f][e] = 1.0/len(f_e_occur[f])
 
-for it in range(opts.iters):
+for it in range(args.iters):
   sys.stderr.write('\niter: {}'.format(it+1))
+  ll = 0
   count = defaultdict(lambda: defaultdict(float))
   for (n, (f,e)) in enumerate(bitext):
     const = 1.0/len(f)
     for i, e_i in enumerate(e):
       norm_e = 0
       for j, f_j in enumerate(f):
-        norm_e += p_e_f[f_j][e_i]
+        norm_e += p_e_f[f_j][e_i]*const
+      ll += math.log(norm_e)
       for j, f_j in enumerate(f):
-        count[f_j][e_i] += p_e_f[f_j][e_i]/norm_e
+        count[f_j][e_i] += (p_e_f[f_j][e_i]*const)/norm_e
     if n % 500 == 0: sys.stderr.write('.')
+  sys.stderr.write('ll: {}'.format(ll))
   for f in count.keys():
     norm = sum(count[f][e] for e in f_e_occur[f])
     for e in f_e_occur[f]:
       p_e_f[f][e] = count[f][e]/float(norm)
 del e_vocab
 del count
+
+if args.out:
+  sys.stderr.write('\nDumping parameters to {}'.format(args.out))
+  outfile = open(args.out, 'wb')
+  pickle.dump(p_e_f, outfile)
+  outfile.close()
+
 sys.stderr.write('\nComputing alignments based on learned parameters...\n')
 for n, (f, e) in enumerate(bitext):
   alignment = []
@@ -51,6 +70,6 @@ for n, (f, e) in enumerate(bitext):
     for j, f_j in enumerate(f):
       if p_e_f[f_j][e_i] > argmax[1]:
         argmax = j, p_e_f[f_j][e_i]
-    alignment.append('{}-{}'.format(argmax[0], i))
+    if argmax[0] > 0:
+      alignment.append('{}-{}'.format(argmax[0]-1, i))
   print ' '.join(alignment)
-
