@@ -10,6 +10,8 @@ parser.add_argument("-b", "--bitext", default="/usr3/home/eschling/mt/hw1_data/d
 parser.add_argument("-n", "--num_sents", default=sys.maxint, type=int, help="Number of sentences to use for training and alignment")
 parser.add_argument("-i", "--iters", default=5, type=int, help="Number of iterations to run EM")
 parser.add_argument("-o", "--out", help="Output file for learned parameters")
+parser.add_argument("-c", "--compound", help="File containing indices to map compound split data back to original input - assumes training data has been compound split")
+parser.add_argument("--backwards", default=False, action='store_true', help="If running English-German, do compound mapping on correct side")
 args = parser.parse_args()
 
 sys.stderr.write("Training with IBM Model 1...")
@@ -62,14 +64,30 @@ if args.out:
   pickle.dump(p_e_f, outfile)
   outfile.close()
 
+compound_indices = []
+if args.compound:
+  with open(args.compound) as f:
+    for line in f:
+      compound_indices.append(line.strip().split())
+
 sys.stderr.write('\nComputing alignments based on learned parameters...\n')
 for n, (f, e) in enumerate(bitext):
   alignment = []
   for i, e_i in enumerate(e):
-    argmax = 0, 0
+    argmax = [0, 0]
     for j, f_j in enumerate(f):
       if p_e_f[f_j][e_i] > argmax[1]:
         argmax = j, p_e_f[f_j][e_i]
+      elif p_e_f[f_j][e_i] == argmax[1]:
+        if abs(j-i) < abs(argmax[0]-i):
+          argmax = j, p_e_f[f_j][e_i]
     if argmax[0] > 0:
-      alignment.append('{}-{}'.format(argmax[0]-1, i))
+      max_j = argmax[0]-1
+      i_ind = i
+      if args.compound:
+        if args.backwards:
+          i_ind = compound_indices[n][i]
+        else:
+          max_j = int(compound_indices[n][max_j])
+      alignment.append('{}-{}'.format(max_j, i_ind))
   print ' '.join(alignment)

@@ -28,12 +28,11 @@ def main(forward_file, backward_file):
     union = fw_align | bw_align
     alignment, aligned_e, aligned_f = grow_diag(intersection, union, aligned_e,
                                                 aligned_f, len_e, len_f)
-    final_fw = final_and(fw_align, aligned_e, aligned_f, len_e, len_f)
-    final_bw = final_and(bw_align, aligned_e, aligned_f, len_e, len_f)
-    symmetrized = alignment | final_fw | final_bw
-    symm = sorted(list(symmetrized), key=lambda al: int(al.split('-')[0]))
-    if symm:
-      print ' '.join(symm)
+    #final_fw = final_and(fw_align, aligned_e, aligned_f, len_e, len_f)
+    #final_bw = final_and(bw_align, aligned_e, aligned_f, len_e, len_f)
+    #symmetrized = alignment | final_fw | final_bw
+    symm = sorted(list(alignment), key=lambda al: int(al.split('-')[0]))
+    print ' '.join(symm)
 
 def grow_diag(intersection, union, aligned_e, aligned_f, len_e, len_f):
   align = set()
