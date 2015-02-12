@@ -18,7 +18,7 @@ The data is lowercased. The German side of the corpus is compound split using th
 
 ###IBM Model 1:
 
-`./ibm1 -b bitext -n numsents -i niters [-o param\_outfile -c compound\_index\_map --backwards]`
+`./ibm1 -b bitext -n num_sents=sys.maxint -i iters=5 [-o param_outfile -c compound_index_map --backwards]`
 
 IBM Model 1 trained with EM. Parameters are initialized only for those words which appear in aligned sentences. The NULL word is added to the beginning of every source sentence. If a compound index map is provided, the source side of the bitext is assumed to be compound split, and after alignment the source alignments are mapped back to original indices. If --backwards is used, the target is assumed to be compound split.
 
@@ -28,7 +28,7 @@ The final output was run for 10 EM iterations.
 
 `python symmetrize.py -f forwards.al -b backwards.al [--gdfa]`
 
-After running ibm1 forwards and backwards, the alignments are symmetrized using symmetrize.py with grow-diag. If --gdfa is used, it symmetrizes with grow-diag-final-and.
+After running ibm1 forwards and backwards, the alignments are symmetrized using symmetrize.py with grow-diag. If `--gdfa` is used, it symmetrizes with grow-diag-final-and.
 
 ###Data:
 
