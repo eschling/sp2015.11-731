@@ -16,7 +16,7 @@ The commands are designed to work in a pipeline. For instance, this is a valid i
 
 The data is lowercased. The German side of the corpus is compound split using the cdec compound-split tool, and a map of the indices in the compound split German back to the original German is printed out during compound splitting.
 
-###IBM Model 1
+###IBM Model 1:
 
 ./ibm1 -b bitext -n numsents -i niters [-o param\_outfile -c compound\_index\_map --backwards]
 
@@ -24,11 +24,13 @@ IBM Model 1 trained with EM. Parameters are initialized only for those words whi
 
 The final output was run for 10 EM iterations.
 
-###Symmetrization
+###Symmetrization:
 
 python symmetrize.py -f forwards.al -b backwards.al [--gdfa]
 
 After running ibm1 forwards and backwards, the alignments are symmetrized using symmetrize.py with grow-diag. If --gdfa is used, it symmetrizes with grow-diag-final-and.
+
+###Data:
 
 The `data/` directory contains a fragment of the German/English Europarl corpus.
 
