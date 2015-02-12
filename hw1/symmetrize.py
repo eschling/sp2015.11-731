@@ -1,8 +1,15 @@
+#!/usr/bin/env python
 import sys
+import argparse
 
 def main(forward_file, backward_file):
-  fw_f = open(forward_file)
-  bw_f = open(backward_file)
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--gdfa', action='store_true', help="Use gdfa to symmetrize (default - gd)")
+  parser.add_argument('-f', '--forwards', help='forward alignment file')
+  parser.add_argument('-b', '--backwards', help='backward alignment file')
+  args = parser.parse_args()
+  fw_f = open(args.forwards)
+  bw_f = open(args.backwards)
   fw = fw_f.read().split('\n')
   bw = bw_f.read().split('\n')
   assert(len(bw)==len(fw))
@@ -28,11 +35,14 @@ def main(forward_file, backward_file):
     union = fw_align | bw_align
     alignment, aligned_e, aligned_f = grow_diag(intersection, union, aligned_e,
                                                 aligned_f, len_e, len_f)
-    #final_fw = final_and(fw_align, aligned_e, aligned_f, len_e, len_f)
-    #final_bw = final_and(bw_align, aligned_e, aligned_f, len_e, len_f)
-    #symmetrized = alignment | final_fw | final_bw
-    symm = sorted(list(alignment), key=lambda al: int(al.split('-')[0]))
-    print ' '.join(symm)
+    if args.gdfa:
+      final_fw = final_and(fw_align, aligned_e, aligned_f, len_e, len_f)
+      final_bw = final_and(bw_align, aligned_e, aligned_f, len_e, len_f)
+      symmetrized = alignment | final_fw | final_bw
+    else:
+      symmetrized = alignment
+    symmetrized = sorted(list(symmetrized), key=lambda al: int(al.split('-')[0]))
+    print ' '.join(symmetrized)
 
 def grow_diag(intersection, union, aligned_e, aligned_f, len_e, len_f):
   align = set()
