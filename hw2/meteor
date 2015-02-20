@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+import argparse # optparse is deprecated
+from itertools import islice # slicing for iterators
+from collections import Counter
+ 
+def word_matches(h, ref):
+  return sum(1 for w in h if w in ref)
+
+def precision_recall(hyp, ref):
+  hcount = Counter(hyp)
+  rcount = Counter(ref)
+  precision = 0.0
+  recall = 0.0
+  for w in hcount:
+    if w in rcount: 
+      precision += hcount[w]
+      recall += hcount[w]
+  precision /= sum(val for val in hcount.values())
+  recall /= sum(val for val in rcount.values())
+  return precision, recall
+
+def set_pr(hyp, ref):
+  hset = set(hyp)
+  rset = set(ref)
+  intersect = hset & rset
+  precision = float(len(intersect))/len(hset)
+  recall = float(len(intersect))/len(rset)
+  return precision, recall
+
+def ngram(sent, n=2):
+  ngrams = []
+  for i in range(len(sent)-n+1):
+    ngrams.append(' '.join(sent[i:i+n]))
+  return ngrams
+
+def fscore(precision, recall, beta=1):
+  denom = (beta**2)*precision + recall
+  if denom==0: return 0
+  return ((1+(beta**2))*precision*recall)/denom
+ 
+def main():
+  parser = argparse.ArgumentParser(description='Evaluate translation hypotheses.')
+  parser.add_argument('-i', '--input', default='data/train-test.hyp1-hyp2-ref',
+            help='input file (default data/train-test.hyp1-hyp2-ref)')
+  parser.add_argument('-n', '--num_sentences', default=None, type=int,
+            help='Number of hypothesis pairs to evaluate')
+  parser.add_argument('-g', '--gold', help='gold data for dev')
+  args = parser.parse_args()
+
+  # we create a generator and avoid loading all sentences into a list
+  def sentences():
+    with open(args.input) as f:
+      for pair in f:
+        yield [sentence.strip().lower().decode('utf8').split() for sentence in pair.split(' ||| ')]
+ 
+  # note: the -n option does not work in the original code
+  for h1, h2, ref in islice(sentences(), args.num_sentences):
+    h1 += ngram(h1, 2) + ngram(h1, 3)
+    h2 += ngram(h2, 2) + ngram(h2, 3)
+    ref += ngram(ref, 2) + ngram(ref, 3)
+    h1_p, h1_r = set_pr(h1, ref) #precision_recall(h1, ref)
+    h2_p, h2_r = set_pr(h2, ref) #precision_recall(h2, ref)
+    h1_f, h2_f = fscore(h1_p, h1_r, 3), fscore(h2_p, h2_r, 3)
+    print(-1 if h1_f > h2_f else # \begin{cases}
+           (0 if h1_f == h2_f
+             else 1)) # \end{cases}
+ 
+# convention to allow import of this file as a module
+if __name__ == '__main__':
+    main()
