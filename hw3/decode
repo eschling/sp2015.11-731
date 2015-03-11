@@ -98,7 +98,8 @@ for f in input_sents:
     # on the last stack
     for stack in stacks:
       for cov, hyp in stack.items():
-        sys.stderr.write('{} {} {} {} {}\n'.format(cov, hyp.logprob+hyp.fcost, hyp.logprob, hyp.fcost, hyp.phrase))
+        if opts.verbose:
+          sys.stderr.write('{} {} {} {} {}\n'.format(cov, hyp.logprob+hyp.fcost, hyp.logprob, hyp.fcost, hyp.phrase))
     if len(stacks[-1]) > 0:
       winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
     else:
