@@ -13,12 +13,20 @@ parser.add_argument('-s', '--stack-size', dest='s', default=100, type=int, help=
 parser.add_argument('-n', '--num_sentences', dest='num_sents', default=sys.maxint, type=int, help='Number of sentences to decode (default=no limit)')
 parser.add_argument('-l', '--language-model', dest='lm', default='data/lm', help='File containing ARPA-format language model (default=data/lm)')
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
+parser.add_argument('-w', '--warm', dest='warm')
 opts = parser.parse_args()
 
 tm = models.TM(opts.tm, 20)
 lm = models.LM(opts.lm)
 sys.stderr.write('Decoding %s...\n' % (opts.input,))
 input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+
+warm = None
+if opts.warm:
+  warm = [line.strip().split('\t') for line in open(opts.warm).readlines()[:opts.num_sents]]
+
+def extract_english_recursive(h):
+        return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
 
 def future_cost_table(f):
   def max_tm(source):
@@ -47,9 +55,8 @@ def future_cost_table(f):
   return cost
 
 model_score = 0.0
-max_stack = 0
-hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost')
-for f in input_sents:
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost, english')
+for ind, f in enumerate(input_sents):
     # The following code implements a DP monotone decoding
     # algorithm (one that doesn't permute the target phrases).
     # Hence all hypotheses in stacks[i] represent translations of 
@@ -59,19 +66,22 @@ for f in input_sents:
     # are, and to estimate future costs)
     fcost = future_cost_table(f)
     uncovered = tuple(0 for _ in f)
-    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1])
-    stacks = [{} for _ in f] + [{}]
-    stacks[0][("", uncovered)] = initial_hypothesis
-    fake_min = [0 for _ in stacks]
-    for m, stack in enumerate(stacks[:-1]):
-        if len(stack) > max_stack: max_stack = len(stack)
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1], "")
+
+    def decode(size, prev_max):
+      stacks = [{} for _ in f] + [{}]
+      stacks[0][(initial_hypothesis.lm_state, uncovered)] = initial_hypothesis
+      fake_min = [0 for _ in stacks]
+      for m, stack in enumerate(stacks[:-1]):
+        if m > 0: stacks[m-1] = {}
         # extend the top s hypotheses in the current stack
         for (english, cov), h in heapq.nlargest(opts.s, stack.iteritems(), key=lambda (_, h): h.logprob + h.fcost): # prune
-          #sys.stderr.write('{} {}, {}, {}, {} prev({}:{}) {}\n'.format(h.cov, h.logprob+h.fcost, h.logprob, h.fcost, h.phrase, h.prev_i, h.prev_j, english))
+          #sys.stderr.write('{} {}, {}, {}, {} {}\n'.format(cov, h.logprob+h.fcost, h.logprob, h.fcost, h.phrase, english))
           for i in xrange(0, len(f)):
             if cov[i] == 1: continue
             for j in xrange(i+1, len(f)+1):
                 if cov[j-1]==1: break
+                english = h.english
                 if f[i:j] in tm:
                     #sys.stderr.write('{}:{} {} '.format(i,j,f[i:j]))
                     covered = [0 for _ in f]
@@ -96,27 +106,35 @@ for f in input_sents:
                             (lm_state, word_logprob) = lm.score(lm_state, word)
                             logprob += word_logprob
                         logprob += lm.end(lm_state) if j == len(f) else 0.0
-                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future)
-                        if (new_english, covered) not in stacks[n] or stacks[n][(new_english, covered)].logprob < logprob: # second case is recombination
-                            if len(stacks[n]) > opts.s:
-                              if logprob+future > fake_min[n]:
-                                stacks[n][(new_english, covered)] = new_hypothesis
-                            elif len(stacks[n]) <= opts.s:
+                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future, new_english)
+                        key = (lm_state, covered)
+                        if key not in stacks[n] or stacks[n][key].logprob < logprob: # second case is recombination
+                            if len(stacks[n]) > size:
+                              if logprob+future > fake_min[n] and logprob+future > prev_max:
+                                stacks[n][key] = new_hypothesis
+                            elif len(stacks[n]) <= size and logprob+future > prev_max:
                               if logprob+future < fake_min[n]: fake_min[n] = logprob+future
-                              stacks[n][(new_english, covered)] = new_hypothesis
-        stacks[m] = {}
+                              stacks[n][key] = new_hypothesis
 
-    def extract_english_recursive(h):
-        return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
+      # find best translation by looking at the best scoring hypothesis
+      # on the last stack
+      if len(stacks[-1]) > 0:
+        (win_english, _), winner = max(heapq.nlargest(50, stacks[-1].iteritems(), key=lambda (c, h): h.logprob), key=lambda (e,h): grade_util.grade(lm, tm, f, tuple(h.english.strip().split())))
+        return win_english, winner
+      else: return None, None
 
-    # find best translation by looking at the best scoring hypothesis
-    # on the last stack
-    if len(stacks[-1]) > 0:
-      (win_english, _), winner = max(heapq.nlargest(50, stacks[-1].iteritems(), key=lambda (c, h): h.logprob), key=lambda (e,h): grade_util.grade(lm, tm, f, tuple(e[0].strip().split())))
-    else:
-      sys.stderr.write('error: no output\n')
-      break
-    print extract_english_recursive(winner)
+    stack_size = 100
+    prev_max_prob = -5000
+    win_english, winner = None, None
+    while stack_size <= opts.s:
+      eng_0, win_0 = decode(stack_size, prev_max_prob)
+      if win_0:
+        win_english = eng_0
+        winner = win_0
+        prev_max_prob = winner.logprob
+      stack_size+=100
+    win_english = winner.english
+    print win_english.strip()
 
     if opts.verbose:
         def extract_tm_logprob(h):
@@ -125,6 +143,5 @@ for f in input_sents:
         model_score += grade_util.grade(lm, tm, f, tuple(win_english.strip().split()))
         sys.stderr.write('%s LM = %f, TM = %f, Total = %f\n' % 
             (win_english, winner.logprob - tm_logprob, tm_logprob, winner.logprob))
-    del stacks
-
-sys.stderr.write('model score: {} max stack size: {}\n'.format(model_score, max_stack))
+if opts.verbose:
+  sys.stderr.write('model score: {} \n'.format(model_score))
