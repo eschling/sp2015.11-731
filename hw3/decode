@@ -4,29 +4,54 @@ import sys
 import models
 import heapq
 import grade_util
+import pickle
 from collections import namedtuple
 
 parser = argparse.ArgumentParser(description='Simple phrase based decoder.')
 parser.add_argument('-i', '--input', dest='input', default='data/input', help='File containing sentences to translate (default=data/input)')
 parser.add_argument('-t', '--translation-model', dest='tm', default='data/tm', help='File containing translation model (default=data/tm)')
-parser.add_argument('-s', '--stack-size', dest='s', default=100, type=int, help='Maximum stack size (default=1)')
+parser.add_argument('-s', '--stack-size', dest='s', default=600, type=int, help='Maximum stack size (default=1)')
+parser.add_argument('--start_stack', default=100, type=int)
 parser.add_argument('-n', '--num_sentences', dest='num_sents', default=sys.maxint, type=int, help='Number of sentences to decode (default=no limit)')
 parser.add_argument('-l', '--language-model', dest='lm', default='data/lm', help='File containing ARPA-format language model (default=data/lm)')
+parser.add_argument('--tm_size', default=30, help='Number of translation model entries to use for each source phrase')
+parser.add_argument('--output_hyp', help='output file for winning hypotheses')
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
-parser.add_argument('-w', '--warm', dest='warm')
 opts = parser.parse_args()
 
-tm = models.TM(opts.tm, 20)
+tm = models.TM(opts.tm, opts.tm_size)
 lm = models.LM(opts.lm)
 sys.stderr.write('Decoding %s...\n' % (opts.input,))
 input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
 
-warm = None
-if opts.warm:
-  warm = [line.strip().split('\t') for line in open(opts.warm).readlines()[:opts.num_sents]]
-
 def extract_english_recursive(h):
         return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
+
+def get_phrases(h):
+  return [] if h.predecessor is None else get_phrases(h.predecessor)+[(h.french, h.phrase)]
+
+def phrases_to_english(phrases):
+  return ' '.join(p.english for phrase in phrases)
+
+def retranslate(f, e, phrases, logprob):
+  better = (logprob, "")
+  e_i = 0
+  for f_ij, p in phrases:
+    len_e = len(p.english.split())
+    if len(tm[f_ij]) > 1:
+      for new in tm[f_ij]:
+        if new.english == p.english: continue
+        new_e = e[0:e_i] + new.english.split() + e[e_i+len_e:]
+        grade = grade_util.grade(lm, tm, f, tuple(new_e))
+        if grade > better[0]: better = (grade, ' '.join(new_e))
+    e_i += len_e
+  return better
+
+def edit_final(f, h, logprob):
+  phrases = get_phrases(h)
+  e = h.english.split()
+  better = retranslate(f, e, phrases, logprob)
+  return better 
 
 def future_cost_table(f):
   def max_tm(source):
@@ -55,7 +80,8 @@ def future_cost_table(f):
   return cost
 
 model_score = 0.0
-hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost, english')
+winners = []
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost, english, french')
 for ind, f in enumerate(input_sents):
     # The following code implements a DP monotone decoding
     # algorithm (one that doesn't permute the target phrases).
@@ -66,7 +92,7 @@ for ind, f in enumerate(input_sents):
     # are, and to estimate future costs)
     fcost = future_cost_table(f)
     uncovered = tuple(0 for _ in f)
-    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1], "")
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1], "", "")
 
     def decode(size, prev_max):
       stacks = [{} for _ in f] + [{}]
@@ -99,6 +125,8 @@ for ind, f in enumerate(input_sents):
                     #sys.stderr.write('{} {}\n'.format(covered, n))
                     for phrase in tm[f[i:j]]:
                         logprob = h.logprob + phrase.logprob
+                        #distortion = -5 * abs(j-i)
+                        #logprob += distortion
                         lm_state = h.lm_state
                         new_english = english
                         for word in phrase.english.split():
@@ -106,7 +134,7 @@ for ind, f in enumerate(input_sents):
                             (lm_state, word_logprob) = lm.score(lm_state, word)
                             logprob += word_logprob
                         logprob += lm.end(lm_state) if j == len(f) else 0.0
-                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future, new_english)
+                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future, new_english, f[i:j])
                         key = (lm_state, covered)
                         if key not in stacks[n] or stacks[n][key].logprob < logprob: # second case is recombination
                             if len(stacks[n]) > size:
@@ -116,32 +144,50 @@ for ind, f in enumerate(input_sents):
                               if logprob+future < fake_min[n]: fake_min[n] = logprob+future
                               stacks[n][key] = new_hypothesis
 
-      # find best translation by looking at the best scoring hypothesis
-      # on the last stack
+      # find best translation by rescoring the best hypotheses
+      # using the grading script, which marginalizes over alignments
       if len(stacks[-1]) > 0:
         (win_english, _), winner = max(heapq.nlargest(50, stacks[-1].iteritems(), key=lambda (c, h): h.logprob), key=lambda (e,h): grade_util.grade(lm, tm, f, tuple(h.english.strip().split())))
+        del stacks
         return win_english, winner
-      else: return None, None
+      else:
+        del stacks
+        return None, None
 
-    stack_size = 100
+    stack_size = opts.start_stack
     prev_max_prob = -5000
     win_english, winner = None, None
+    win_grade = -5000
     while stack_size <= opts.s:
       eng_0, win_0 = decode(stack_size, prev_max_prob)
       if win_0:
-        win_english = eng_0
-        winner = win_0
-        prev_max_prob = winner.logprob
+        new_grade = grade_util.grade(lm, tm, f, tuple(win_0.english.strip().split()))
+        if new_grade > win_grade:
+          win_english = eng_0
+          winner = win_0
+          prev_max_prob = winner.logprob
+          win_grade = new_grade
       stack_size+=100
     win_english = winner.english
-    print win_english.strip()
+    winners.append((winner, win_grade))
+
+    score, edited = edit_final(f, winner, win_grade)
+    if score > win_grade:
+      print edited
+      win_english = edited
+      sys.stderr.write("Using edited translation\n")
+    else:
+      print win_english.strip()
 
     if opts.verbose:
         def extract_tm_logprob(h):
             return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
         tm_logprob = extract_tm_logprob(winner)
-        model_score += grade_util.grade(lm, tm, f, tuple(win_english.strip().split()))
-        sys.stderr.write('%s LM = %f, TM = %f, Total = %f\n' % 
-            (win_english, winner.logprob - tm_logprob, tm_logprob, winner.logprob))
+        model_score += win_grade
+        sys.stderr.write('%s LM = %f, TM = %f, Total = %f, %f \n' % 
+            (win_english, winner.logprob - tm_logprob, tm_logprob, winner.logprob, win_grade))
 if opts.verbose:
   sys.stderr.write('model score: {} \n'.format(model_score))
+if opts.output_hyp:
+  with open(opts.output_hyp, 'w') as out:
+    pickle.dump(winners, out)
