@@ -14,8 +14,10 @@ parser.add_argument('-s', '--stack-size', dest='s', default=600, type=int, help=
 parser.add_argument('--start_stack', default=100, type=int)
 parser.add_argument('-n', '--num_sentences', dest='num_sents', default=sys.maxint, type=int, help='Number of sentences to decode (default=no limit)')
 parser.add_argument('-l', '--language-model', dest='lm', default='data/lm', help='File containing ARPA-format language model (default=data/lm)')
-parser.add_argument('--tm_size', default=30, help='Number of translation model entries to use for each source phrase')
+parser.add_argument('--tm_size', default=30, type=int, help='Number of translation model entries to use for each source phrase')
 parser.add_argument('--output_hyp', help='output file for winning hypotheses')
+parser.add_argument('--rescore', default=50, type=int, help='Number of hypotheses to rescore with marginal per sentence')
+parser.add_argument('--reorder_limit', default=50, type=int)
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
 opts = parser.parse_args()
 
@@ -103,13 +105,12 @@ for ind, f in enumerate(input_sents):
         # extend the top s hypotheses in the current stack
         for (english, cov), h in heapq.nlargest(opts.s, stack.iteritems(), key=lambda (_, h): h.logprob + h.fcost): # prune
           #sys.stderr.write('{} {}, {}, {}, {} {}\n'.format(cov, h.logprob+h.fcost, h.logprob, h.fcost, h.phrase, english))
-          for i in xrange(0, len(f)):
+          for i in xrange(0, min(len(f), m+opts.reorder_limit)):
             if cov[i] == 1: continue
-            for j in xrange(i+1, len(f)+1):
+            for j in xrange(i+1, min(len(f)+1, m+opts.reorder_limit+1)):
                 if cov[j-1]==1: break
                 english = h.english
                 if f[i:j] in tm:
-                    #sys.stderr.write('{}:{} {} '.format(i,j,f[i:j]))
                     covered = [0 for _ in f]
                     start = 0
                     future = 0.0
@@ -122,11 +123,8 @@ for ind, f in enumerate(input_sents):
                         start = k + 1
                     if start < len(f): future += fcost[start][len(f)-1]
                     covered = tuple(covered)
-                    #sys.stderr.write('{} {}\n'.format(covered, n))
                     for phrase in tm[f[i:j]]:
                         logprob = h.logprob + phrase.logprob
-                        #distortion = -5 * abs(j-i)
-                        #logprob += distortion
                         lm_state = h.lm_state
                         new_english = english
                         for word in phrase.english.split():
@@ -147,7 +145,7 @@ for ind, f in enumerate(input_sents):
       # find best translation by rescoring the best hypotheses
       # using the grading script, which marginalizes over alignments
       if len(stacks[-1]) > 0:
-        (win_english, _), winner = max(heapq.nlargest(50, stacks[-1].iteritems(), key=lambda (c, h): h.logprob), key=lambda (e,h): grade_util.grade(lm, tm, f, tuple(h.english.strip().split())))
+        (win_english, _), winner = max(heapq.nlargest(opts.rescore, stacks[-1].iteritems(), key=lambda (c, h): h.logprob), key=lambda (e,h): grade_util.grade(lm, tm, f, tuple(h.english.strip().split())))
         del stacks
         return win_english, winner
       else:
