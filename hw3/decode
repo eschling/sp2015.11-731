@@ -19,6 +19,7 @@ parser.add_argument('--output_hyp', help='output file for winning hypotheses')
 parser.add_argument('--rescore', default=50, type=int, help='Number of hypotheses to rescore with marginal per sentence')
 parser.add_argument('--reorder_limit', default=50, type=int)
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
+parser.add_argument('--insert_phrase', type=int, help='insert new phrases up to k places back in target translation')
 opts = parser.parse_args()
 
 tm = models.TM(opts.tm, opts.tm_size)
@@ -31,6 +32,9 @@ def extract_english_recursive(h):
 
 def get_phrases(h):
   return [] if h.predecessor is None else get_phrases(h.predecessor)+[(h.french, h.phrase)]
+
+def phrase_list_to_english(phrases):
+  return ' '.join(p[1][0] for p in phrases)
 
 def phrases_to_english(phrases):
   return ' '.join(p.english for phrase in phrases)
@@ -83,7 +87,7 @@ def future_cost_table(f):
 
 model_score = 0.0
 winners = []
-hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost, english, french')
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, fcost, english, french, plist')
 for ind, f in enumerate(input_sents):
     # The following code implements a DP monotone decoding
     # algorithm (one that doesn't permute the target phrases).
@@ -94,7 +98,7 @@ for ind, f in enumerate(input_sents):
     # are, and to estimate future costs)
     fcost = future_cost_table(f)
     uncovered = tuple(0 for _ in f)
-    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1], "", "")
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, fcost[0][len(f)-1], "", "", [])
 
     def decode(size, prev_max):
       stacks = [{} for _ in f] + [{}]
@@ -124,6 +128,33 @@ for ind, f in enumerate(input_sents):
                     if start < len(f): future += fcost[start][len(f)-1]
                     covered = tuple(covered)
                     for phrase in tm[f[i:j]]:
+                      if opts.insert_phrase:
+                        orderings = []
+                        best_ordering = []
+                        best_score = -5000
+                        best_lm = tuple()
+                        for k in range(max(0, len(h.plist)-opts.insert_phrase), len(h.plist)+1):
+                          new_phrases = h.plist[:k] + [(f[i:j], phrase)] + h.plist[k:]
+                          lm_state = lm.begin()
+                          logprob = 0
+                          for p in new_phrases:
+                            logprob += p[1][1]
+                            for w in p[1][0].split():
+                              (lm_state, word_logprob) = lm.score(lm_state, w)
+                              logprob += word_logprob
+                          logprob += lm.end(lm_state) if j == len(f) else 0.0
+                          orderings.append((logprob, new_phrases, lm_state))
+                          if logprob > best_score:
+                            best_score = logprob
+                            best_ordering = new_phrases
+                            best_lm = lm_state
+                        for rlp, rph, rlm in heapq.nlargest(2, orderings, key=lambda x:x[0]):
+                          english = phrase_list_to_english(rph)
+                          new_hypothesis = hypothesis(rlp, rlm, h, phrase, future, english, f[i:j], rph)
+                          key = (rlm, covered)
+                          if key not in stacks[n] or stacks[n][key].logprob < logprob:
+                            stacks[n][key] = new_hypothesis
+                      else:
                         logprob = h.logprob + phrase.logprob
                         lm_state = h.lm_state
                         new_english = english
@@ -132,15 +163,15 @@ for ind, f in enumerate(input_sents):
                             (lm_state, word_logprob) = lm.score(lm_state, word)
                             logprob += word_logprob
                         logprob += lm.end(lm_state) if j == len(f) else 0.0
-                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future, new_english, f[i:j])
+                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase, future, new_english, f[i:j], h.plist + [(f[i:j], phrase)])
                         key = (lm_state, covered)
                         if key not in stacks[n] or stacks[n][key].logprob < logprob: # second case is recombination
-                            if len(stacks[n]) > size:
-                              if logprob+future > fake_min[n] and logprob+future > prev_max:
-                                stacks[n][key] = new_hypothesis
-                            elif len(stacks[n]) <= size and logprob+future > prev_max:
-                              if logprob+future < fake_min[n]: fake_min[n] = logprob+future
+                          if len(stacks[n]) > size:
+                            if logprob+future > fake_min[n] and logprob+future > prev_max:
                               stacks[n][key] = new_hypothesis
+                          elif len(stacks[n]) <= size and logprob+future > prev_max:
+                            if logprob+future < fake_min[n]: fake_min[n] = logprob+future
+                            stacks[n][key] = new_hypothesis
 
       # find best translation by rescoring the best hypotheses
       # using the grading script, which marginalizes over alignments
