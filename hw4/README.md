@@ -1,3 +1,5 @@
+Implemented the baseline hinge loss perceptron algorithm with batch updates and adagrad. It's very fast, but with larger feature sets it uses a lot of memory (or not a lot on allegro, but probably not doable on a home computer - which I don't have, but still). Added a few part of speech and suffix features.
+
 There are three Python programs here (`-h` for usage):
 
  - `./rerank` a simple reranker that simply sorts candidate translations on log p(czech|english)
